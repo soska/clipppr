@@ -45,6 +45,32 @@ def test_plan_clip_clamps_to_video_duration():
     assert plan.cut_end <= 11.0
 
 
+def test_plan_clip_applies_manual_adjust():
+    config = Config()
+    config.clips.lead_padding = 1.0
+    config.clips.trail_padding = 1.0
+    # +2s more clip at the start, 0.5s trimmed from the end.
+    cand = Candidate(
+        title="t", hook="h", category="quote", start=3.0, end=8.0,
+        lead_adjust=2.0, trail_adjust=-0.5,
+    )
+    plan = plan_clip(cand, _words(), config, video_duration=100.0)
+    # start 3.0 -> w3 (3.0); cut_start = 3.0 - lead_padding(1) - lead_adjust(2)
+    assert plan.cut_start == 0.0
+    # end 8.0 -> w7 end (7.9); cut_end = 7.9 + trail_padding(1) + trail_adjust(-0.5)
+    assert round(plan.cut_end, 3) == round(7.9 + 1.0 - 0.5, 3)
+
+
+def test_plan_clip_overcut_stays_nonempty():
+    config = Config()
+    cand = Candidate(
+        title="t", hook="h", category="quote", start=3.0, end=5.0,
+        trail_adjust=-100.0,  # trims far more than the clip's length
+    )
+    plan = plan_clip(cand, _words(), config)
+    assert plan.cut_end > plan.cut_start
+
+
 def test_format_srt_time():
     assert _format_srt_time(0) == "00:00:00,000"
     assert _format_srt_time(1.5) == "00:00:01,500"

@@ -23,6 +23,7 @@ pip install -e .
 
 ```bash
 clipper <source> [--config PATH] [--out DIR] [--yes] [--dry-run] [--clear-cache]
+clipper <source> --adjust <CLIP> [--start SEC] [--end SEC]
 ```
 
 - `<source>` — a YouTube URL or a path to a local video file
@@ -32,6 +33,7 @@ clipper <source> [--config PATH] [--out DIR] [--yes] [--dry-run] [--clear-cache]
 - `--dry-run` — do everything except writing clip files
 - `--clear-cache` — delete the `./.clipper-cache` directory; with no source it
   just clears and exits, with a source it clears then runs fresh
+- `--adjust` — correct a clip's edges and re-render it (see below)
 
 Examples:
 
@@ -44,6 +46,25 @@ clipper --clear-cache https://youtu.be/abc  # re-run a video from scratch
 ```
 
 You can also run it as a module: `python -m clipper <source>`.
+
+## Adjusting clips
+
+If a rendered clip starts or ends a little too tight or too loose, correct it
+without re-running the whole pipeline:
+
+```bash
+clipper <source> --adjust 3 --start +2        # 2s more before clip 3 starts
+clipper <source> --adjust 3 --end -1          # trim 1s off clip 3's end
+clipper <source> --adjust 3 --start +2 --end -1
+clipper <source> --adjust all --start +1.5    # 1.5s more lead-in on every clip
+clipper <source> --adjust 3                   # no change: just list the clips
+```
+
+`--start` / `--end` take signed seconds — **`+N` lengthens that edge of the
+clip, `-N` shortens it**. The correction is saved into `candidates.json` (so it
+survives later runs) and only the affected clip is re-cut, overwriting its
+`.mp4` and `.srt`. Adjustments are cumulative, and `--dry-run` previews the
+before/after without writing anything.
 
 ## How it works
 
@@ -58,8 +79,9 @@ You can also run it as a module: `python -m clipper <source>`.
 4. **Select.** A `rich` table lists the candidates; pick them with indices
    (`1,3`), ranges (`1-3`), `all`, or `q` to quit.
 5. **Render.** Each selected clip is cut with `ffmpeg` (re-encoded for a
-   frame-accurate cut) and gets a sibling `.srt` sliced to that clip. Output
-   lands in a per-video subfolder: `<output_dir>/<video-title>/`.
+   frame-accurate cut) and gets a sibling `.srt`, with cues anchored to the
+   rendered file's start so they stay in sync with the audio. Output lands in
+   a per-video subfolder: `<output_dir>/<video-title>/`.
 
 ## Caching
 

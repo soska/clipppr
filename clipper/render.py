@@ -47,13 +47,22 @@ def plan_clip(
     config: Config,
     video_duration: float | None = None,
 ) -> ClipPlan:
-    """Compute snapped, padded cut points for ``candidate``."""
+    """Compute snapped, padded cut points for ``candidate``.
+
+    Final cut = snapped word boundaries, plus config padding, plus the
+    candidate's manual ``lead_adjust`` / ``trail_adjust`` corrections.
+    """
     clip_start, clip_end = snap_to_words(candidate.start, candidate.end, words)
-    cut_start = max(0.0, clip_start - config.clips.lead_padding)
-    cut_end = clip_end + config.clips.trail_padding
+    cut_start = max(
+        0.0,
+        clip_start - config.clips.lead_padding - candidate.lead_adjust,
+    )
+    cut_end = clip_end + config.clips.trail_padding + candidate.trail_adjust
     if video_duration is not None:
         cut_end = min(cut_end, video_duration)
         cut_start = min(cut_start, max(0.0, cut_end - 0.1))
+    if cut_end <= cut_start:  # an over-aggressive cut — keep it non-empty
+        cut_end = cut_start + 0.1
     return ClipPlan(cut_start, cut_end, clip_start, clip_end)
 
 
@@ -65,8 +74,12 @@ def render_clip(
     srt_path: Path,
     config: Config,
 ) -> int:
-    """Render the clip's .mp4 and write its sibling .srt. Returns the cue count."""
-    cue_count = write_srt(srt_path, words, plan.clip_start, plan.clip_end)
+    """Render the clip's .mp4 and write its sibling .srt. Returns the cue count.
+
+    The .srt is anchored to the rendered file's start (``cut_start``), so its
+    cues stay in sync with the audio regardless of how much padding is used.
+    """
+    cue_count = write_srt(srt_path, words, plan.cut_start, plan.cut_end)
     _run_ffmpeg(input_path, plan, mp4_path, config)
     return cue_count
 
@@ -139,11 +152,11 @@ def _run_ffmpeg(
 def write_srt(
     path: Path, words: list[Word], clip_start: float, clip_end: float
 ) -> int:
-    """Write a clip-relative .srt for the words in ``[clip_start, clip_end]``.
+    """Write an .srt for the words in ``[clip_start, clip_end]``.
 
-    Words are grouped into cues of up to ~7 words or ~2.5 s, and all
-    timestamps are shifted so the first cue starts at ``00:00:00,000``.
-    Returns the number of cues written.
+    Timestamps are shifted to be relative to ``clip_start`` (the rendered
+    file's start), so cues line up with the audio. Words are grouped into
+    cues of up to ~7 words or ~2.5 s. Returns the number of cues written.
     """
     sliced = [w for w in words if w.end > clip_start and w.start < clip_end]
     cues = _group_cues(sliced)

@@ -86,10 +86,10 @@ def parse_selection(raw: str, count: int) -> list[int]:
 
 def select_candidates(
     candidates: list[Candidate], console: Console
-) -> list[Candidate] | None:
+) -> list[int] | None:
     """Show the table and prompt the user.
 
-    Returns the chosen candidates, or ``None`` if the user quit.
+    Returns the chosen 0-based indices, or ``None`` if the user quit.
     """
     show_candidates(candidates, console)
     while True:
@@ -102,8 +102,7 @@ def select_candidates(
         if raw.strip().lower() == "q":
             return None
         try:
-            indices = parse_selection(raw, len(candidates))
+            return parse_selection(raw, len(candidates))
         except ValueError as exc:
             console.print(f"[red]Invalid selection:[/] {exc}")
             continue
-        return [candidates[i] for i in indices]

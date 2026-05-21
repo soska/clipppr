@@ -8,12 +8,19 @@ import shutil
 from pathlib import Path
 
 from rich.console import Console
+from rich.table import Table
 
 from . import __version__
-from .candidates import CandidatesError, get_candidates
+from .candidates import (
+    CandidatesError,
+    get_candidates,
+    load_candidates_file,
+    save_candidates_file,
+)
 from .config import Config, ConfigError, load_config
+from .models import Candidate, Word
 from .naming import slugify, unique_slug
-from .render import RenderError, plan_clip, probe_duration, render_clip
+from .render import RenderError, ClipPlan, plan_clip, probe_duration, render_clip
 from .select import format_timestamp, select_candidates, show_candidates
 from .source import CACHE_DIR_NAME, ResolvedSource, SourceError, resolve_source
 from .transcript import TranscriptError, get_transcript
@@ -67,6 +74,12 @@ def _run(args: argparse.Namespace, console: Console) -> int:
         )
         return 2
 
+    if (args.start is not None or args.end is not None) and args.adjust is None:
+        console.print(
+            "[bold red]Error:[/] --start/--end only apply together with --adjust."
+        )
+        return 2
+
     if shutil.which("ffmpeg") is None:
         console.print("[bold red]Error:[/] ffmpeg was not found on your PATH.")
         console.print(
@@ -74,6 +87,9 @@ def _run(args: argparse.Namespace, console: Console) -> int:
             "or your system package manager."
         )
         return 1
+
+    if args.adjust is not None:
+        return _adjust(args, console)
 
     config = load_config(args.config)
     if args.out:
@@ -96,7 +112,7 @@ def _run(args: argparse.Namespace, console: Console) -> int:
 
     if args.yes:
         show_candidates(candidates, console)
-        selected = candidates
+        selected = list(range(len(candidates)))
     else:
         selected = select_candidates(candidates, console)
         if selected is None:
@@ -107,45 +123,42 @@ def _run(args: argparse.Namespace, console: Console) -> int:
             return 0
 
     console.rule("[bold]Render")
-    return _render_all(selected, source, words, config, console, args.dry_run)
+    return _render_all(candidates, selected, source, words, config, console, args.dry_run)
+
+
+# ------------------------------------------------------------------------- render
 
 
 def _render_all(
-    selected: list,
+    candidates: list[Candidate],
+    selected: list[int],
     source: ResolvedSource,
-    words: list,
+    words: list[Word],
     config: Config,
     console: Console,
     dry_run: bool,
 ) -> int:
-    # Each video gets its own subfolder inside the output directory, named
-    # after the video title (the filename for a local file).
-    base_dir = Path(config.clips.output_dir).expanduser()
-    folder = slugify(source.title) if source.title.strip() else source.video_id
-    out_dir = base_dir / folder
+    out_dir = _video_out_dir(source, config)
     out_dir.mkdir(parents=True, exist_ok=True)
     console.print(f"  output folder: [cyan]{out_dir}[/]")
-    taken = _existing_slugs(out_dir)
+    paths = _clip_paths(candidates, out_dir)
     video_duration = probe_duration(source.video_path)
 
-    for candidate in selected:
-        slug = unique_slug(slugify(candidate.title), taken)
-        mp4_path = out_dir / f"{slug}.mp4"
-        srt_path = out_dir / f"{slug}.srt"
-        plan = plan_clip(candidate, words, config, video_duration)
-        span = (
-            f"{format_timestamp(plan.cut_start)}-{format_timestamp(plan.cut_end)} "
-            f"({plan.duration:.1f}s)"
-        )
+    for i in selected:
+        mp4_path, srt_path = paths[i]
+        plan = plan_clip(candidates[i], words, config, video_duration)
+        span = _span(plan)
         if dry_run:
-            console.print(f"  [dim][dry-run][/] {slug}.mp4 + .srt  [dim]{span}[/]")
+            console.print(f"  [dim][dry-run][/] {mp4_path.name} + .srt  [dim]{span}[/]")
             continue
-        console.print(f"  rendering [cyan]{slug}.mp4[/]  [dim]{span}[/]")
+        console.print(f"  rendering [cyan]{mp4_path.name}[/]  [dim]{span}[/]")
         cues = render_clip(
             source.video_path, plan, words, mp4_path, srt_path, config
         )
-        console.print(f"  [green]done[/] {mp4_path.name} + {srt_path.name} "
-                      f"[dim]({cues} subtitle cues)[/]")
+        console.print(
+            f"  [green]done[/] {mp4_path.name} + {srt_path.name} "
+            f"[dim]({cues} subtitle cues)[/]"
+        )
 
     if dry_run:
         console.print("[yellow]Dry run — no files were written.[/]")
@@ -154,14 +167,161 @@ def _render_all(
     return 0
 
 
-def _existing_slugs(out_dir: Path) -> set[str]:
-    """Collect basenames already in the output dir so new clips never clobber."""
-    slugs: set[str] = set()
-    if out_dir.is_dir():
-        for path in out_dir.iterdir():
-            if path.suffix.lower() in (".mp4", ".srt"):
-                slugs.add(path.stem)
-    return slugs
+# ------------------------------------------------------------------------- adjust
+
+
+def _adjust(args: argparse.Namespace, console: Console) -> int:
+    """Correct a clip's edges, persist it to candidates.json, and re-render."""
+    config = load_config(args.config)
+    if args.out:
+        config.clips.output_dir = args.out
+
+    console.print(f"[bold]Source[/]  {args.source}")
+    source = resolve_source(args.source, console)
+
+    loaded = load_candidates_file(source.cache_dir)
+    if loaded is None:
+        raise CandidatesError(
+            f"No saved clips for this video — run 'clipper {args.source}' first."
+        )
+    key, candidates = loaded
+
+    targets = _adjust_targets(args.adjust, len(candidates))
+    lead_delta = args.start or 0.0
+    trail_delta = args.end or 0.0
+
+    words = get_transcript(source, config, console)
+    video_duration = probe_duration(source.video_path)
+    out_dir = _video_out_dir(source, config)
+    paths = _clip_paths(candidates, out_dir)
+
+    console.rule("[bold]Adjust")
+    if lead_delta == 0.0 and trail_delta == 0.0:
+        _show_clip_table(candidates, words, config, video_duration, console)
+        console.print(
+            "[yellow]No change requested.[/] Pass [cyan]--start[/] and/or "
+            "[cyan]--end[/], e.g. [cyan]--start +2 --end -1[/]."
+        )
+        return 0
+
+    # Apply the corrections, showing each targeted clip before -> after.
+    for i in targets:
+        candidate = candidates[i]
+        before = plan_clip(candidate, words, config, video_duration)
+        candidate.lead_adjust += lead_delta
+        candidate.trail_adjust += trail_delta
+        after = plan_clip(candidate, words, config, video_duration)
+        console.print(
+            f"  clip {i + 1}  [cyan]{paths[i][0].name}[/]\n"
+            f"    {_span(before)}  ->  {_span(after)}"
+        )
+
+    if args.dry_run:
+        console.print(
+            "[yellow]Dry run — candidates.json unchanged, nothing re-rendered.[/]"
+        )
+        return 0
+
+    save_candidates_file(source.cache_dir, key, candidates)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    console.rule("[bold]Re-render")
+    for i in targets:
+        mp4_path, srt_path = paths[i]
+        plan = plan_clip(candidates[i], words, config, video_duration)
+        console.print(f"  rendering [cyan]{mp4_path.name}[/]")
+        cues = render_clip(
+            source.video_path, plan, words, mp4_path, srt_path, config
+        )
+        console.print(
+            f"  [green]done[/] {mp4_path.name} + {srt_path.name} "
+            f"[dim]({cues} subtitle cues)[/]"
+        )
+    console.print(
+        f"[bold green]Finished.[/] Updated {len(targets)} clip(s) in {out_dir}"
+    )
+    return 0
+
+
+def _adjust_targets(spec: str, count: int) -> list[int]:
+    """Resolve the --adjust value (a clip number or 'all') to 0-based indices."""
+    if spec.strip().lower() == "all":
+        return list(range(count))
+    try:
+        number = int(spec)
+    except ValueError:
+        raise CandidatesError(
+            f"--adjust expects a clip number or 'all', got '{spec}'."
+        ) from None
+    if not 1 <= number <= count:
+        raise CandidatesError(f"clip {number} is out of range (1-{count}).")
+    return [number - 1]
+
+
+def _show_clip_table(
+    candidates: list[Candidate],
+    words: list[Word],
+    config: Config,
+    video_duration: float | None,
+    console: Console,
+) -> None:
+    """Print every clip with its current cut range and applied corrections."""
+    slugs = _clip_slugs(candidates)
+    table = Table(title="Clips")
+    table.add_column("#", justify="right", style="bold cyan", no_wrap=True)
+    table.add_column("Clip")
+    table.add_column("Range", justify="right", style="dim", no_wrap=True)
+    table.add_column("Dur", justify="right", no_wrap=True)
+    table.add_column("Correction", no_wrap=True)
+    for i, candidate in enumerate(candidates):
+        plan = plan_clip(candidate, words, config, video_duration)
+        corrections = []
+        if candidate.lead_adjust:
+            corrections.append(f"start {candidate.lead_adjust:+g}s")
+        if candidate.trail_adjust:
+            corrections.append(f"end {candidate.trail_adjust:+g}s")
+        table.add_row(
+            str(i + 1),
+            slugs[i],
+            f"{format_timestamp(plan.cut_start)}-{format_timestamp(plan.cut_end)}",
+            f"{plan.duration:.1f}s",
+            ", ".join(corrections) or "[dim]—[/]",
+        )
+    console.print(table)
+
+
+# ------------------------------------------------------------------------ shared
+
+
+def _video_out_dir(source: ResolvedSource, config: Config) -> Path:
+    """The per-video output subfolder: ``<output_dir>/<video-title>/``."""
+    base = Path(config.clips.output_dir).expanduser()
+    folder = slugify(source.title) if source.title.strip() else source.video_id
+    return base / folder
+
+
+def _clip_slugs(candidates: list[Candidate]) -> list[str]:
+    """A deterministic kebab-case basename per candidate (stable across runs)."""
+    taken: set[str] = set()
+    return [unique_slug(slugify(c.title), taken) for c in candidates]
+
+
+def _clip_paths(
+    candidates: list[Candidate], out_dir: Path
+) -> list[tuple[Path, Path]]:
+    """The (mp4, srt) path for each candidate. Stable, so --adjust hits the
+    same file the original render produced."""
+    return [
+        (out_dir / f"{slug}.mp4", out_dir / f"{slug}.srt")
+        for slug in _clip_slugs(candidates)
+    ]
+
+
+def _span(plan: ClipPlan) -> str:
+    return (
+        f"{format_timestamp(plan.cut_start)}-{format_timestamp(plan.cut_end)} "
+        f"({plan.duration:.1f}s)"
+    )
 
 
 def _clear_cache(console: Console) -> None:
@@ -230,6 +390,24 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="delete the ./.clipper-cache directory; with no source, exit "
         "after clearing, otherwise run fresh",
+    )
+    parser.add_argument(
+        "--adjust",
+        metavar="CLIP",
+        help="correct a clip's edges and re-render it: a clip number (from "
+        "the table) or 'all'. Use with --start / --end.",
+    )
+    parser.add_argument(
+        "--start",
+        type=float,
+        metavar="SEC",
+        help="with --adjust: seconds to add (+) or trim (-) at the clip start",
+    )
+    parser.add_argument(
+        "--end",
+        type=float,
+        metavar="SEC",
+        help="with --adjust: seconds to add (+) or trim (-) at the clip end",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"

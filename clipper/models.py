@@ -37,6 +37,10 @@ class Candidate(BaseModel):
     start: float = Field(ge=0)
     end: float = Field(gt=0)
     reason: str = ""
+    # Manual edge corrections (seconds), applied on top of config padding.
+    # Positive = more clip on that edge; set by the `--adjust` command.
+    lead_adjust: float = 0.0
+    trail_adjust: float = 0.0
 
     @field_validator("category", mode="before")
     @classmethod

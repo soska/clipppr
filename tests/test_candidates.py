@@ -7,6 +7,8 @@ from clipper.candidates import (
     _parse,
     _save_candidates_cache,
     format_transcript,
+    load_candidates_file,
+    save_candidates_file,
 )
 from clipper.config import Config
 from clipper.models import Candidate, Word
@@ -108,3 +110,23 @@ def test_candidates_cache_invalidated_by_transcript_change():
 
 def test_candidates_cache_missing_file_returns_none(tmp_path):
     assert _load_candidates_cache(tmp_path / "absent.json", "anykey") is None
+
+
+def test_candidates_file_roundtrip_preserves_adjustments(tmp_path):
+    cands = [
+        Candidate(
+            title="T", hook="H", category="quote", start=1.0, end=9.0,
+            lead_adjust=2.5, trail_adjust=-1.0,
+        )
+    ]
+    save_candidates_file(tmp_path, "thekey", cands)
+    loaded = load_candidates_file(tmp_path)
+    assert loaded is not None
+    key, got = loaded
+    assert key == "thekey"
+    assert got[0].lead_adjust == 2.5
+    assert got[0].trail_adjust == -1.0
+
+
+def test_load_candidates_file_missing_returns_none(tmp_path):
+    assert load_candidates_file(tmp_path) is None

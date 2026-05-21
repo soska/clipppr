@@ -229,6 +229,30 @@ def _save_candidates_cache(
     )
 
 
+def load_candidates_file(cache_dir: Path) -> tuple[str, list[Candidate]] | None:
+    """Read ``candidates.json`` for editing — returns ``(key, candidates)``.
+
+    Unlike the cache lookup, the stored key is returned as-is rather than
+    validated, so the `--adjust` command can edit and rewrite the file.
+    """
+    path = cache_dir / CANDIDATES_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        candidates = [Candidate.model_validate(c) for c in data["candidates"]]
+        return str(data.get("key", "")), candidates
+    except (json.JSONDecodeError, KeyError, TypeError, ValidationError, OSError):
+        return None
+
+
+def save_candidates_file(
+    cache_dir: Path, key: str, candidates: list[Candidate]
+) -> None:
+    """Write ``candidates.json`` back, preserving its cache key."""
+    _save_candidates_cache(cache_dir / CANDIDATES_FILENAME, key, candidates)
+
+
 # ---------------------------------------------------------------------- internal
 
 
