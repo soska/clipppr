@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# clipppr working files
+.clipper-cache/
+clips/
+
+# Secrets — never commit
+.env
+.env.*
+
+# Editor / OS
+.DS_Store
+.history/
+.claude/settings.local.json

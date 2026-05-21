@@ -1,0 +1,29 @@
+# clipppr configuration.
+# Resolution order: --config <path>  ->  ./config.toml  ->  ~/.config/clipper/config.toml  ->  built-in defaults.
+
+[llm]
+# Any litellm model string. Keys are read from env automatically:
+# ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, etc.
+model = "anthropic/claude-haiku-4-5"
+temperature = 0.4
+max_candidates = 10
+
+[clips]
+min_duration = 15      # seconds
+max_duration = 60
+lead_padding = 2.0     # seconds added before clip start
+trail_padding = 2.0    # seconds added after clip end
+output_dir = "./clips"   # clips for each video go in a subfolder named after it
+
+[transcript]
+language = "es"                   # ISO 639-1 code; passed to Whisper and yt-dlp
+whisper_model = "medium"          # tiny | base | small | medium | large-v3
+whisper_compute = "int8"          # int8 | int8_float16 | float16 | float32
+prefer_youtube_captions = true
+
+[ffmpeg]
+video_codec = "libx264"
+audio_codec = "aac"
+crf = 20
+preset = "veryfast"
+loudnorm = true                   # apply -af loudnorm=I=-16:TP=-1.5:LRA=11
