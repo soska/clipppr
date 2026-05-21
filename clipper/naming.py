@@ -21,17 +21,3 @@ def slugify(title: str) -> str:
     if len(slug) > MAX_SLUG_LEN:
         slug = slug[:MAX_SLUG_LEN].rstrip("-")
     return slug or "clip"
-
-
-def unique_slug(slug: str, taken: set[str]) -> str:
-    """Return a slug not present in ``taken``, suffixing ``-2``, ``-3``, ...
-
-    The returned slug is added to ``taken`` so repeated calls stay collision-free.
-    """
-    candidate = slug
-    n = 2
-    while candidate in taken:
-        candidate = f"{slug}-{n}"
-        n += 1
-    taken.add(candidate)
-    return candidate

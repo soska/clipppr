@@ -81,7 +81,9 @@ before/after without writing anything.
 5. **Render.** Each selected clip is cut with `ffmpeg` (re-encoded for a
    frame-accurate cut) and gets a sibling `.srt`, with cues anchored to the
    rendered file's start so they stay in sync with the audio. Output lands in
-   a per-video subfolder: `<output_dir>/<video-title>/`.
+   a per-video subfolder: `<output_dir>/<video-title>/`. Files are named
+   `NN-clip-title.mp4` — the `NN` prefix matches the clip's number in the
+   table and in `--adjust`.
 
 ## Caching
 

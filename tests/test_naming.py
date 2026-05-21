@@ -1,4 +1,4 @@
-from clipper.naming import slugify, unique_slug
+from clipper.naming import slugify
 
 
 def test_slugify_basic():
@@ -22,11 +22,3 @@ def test_slugify_caps_length():
 def test_slugify_empty_falls_back():
     assert slugify("!!!") == "clip"
     assert slugify("") == "clip"
-
-
-def test_unique_slug_resolves_collisions():
-    taken: set[str] = set()
-    assert unique_slug("clip", taken) == "clip"
-    assert unique_slug("clip", taken) == "clip-2"
-    assert unique_slug("clip", taken) == "clip-3"
-    assert taken == {"clip", "clip-2", "clip-3"}

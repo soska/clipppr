@@ -19,7 +19,7 @@ from .candidates import (
 )
 from .config import Config, ConfigError, load_config
 from .models import Candidate, Word
-from .naming import slugify, unique_slug
+from .naming import slugify
 from .render import RenderError, ClipPlan, plan_clip, probe_duration, render_clip
 from .select import format_timestamp, select_candidates, show_candidates
 from .source import CACHE_DIR_NAME, ResolvedSource, SourceError, resolve_source
@@ -301,9 +301,16 @@ def _video_out_dir(source: ResolvedSource, config: Config) -> Path:
 
 
 def _clip_slugs(candidates: list[Candidate]) -> list[str]:
-    """A deterministic kebab-case basename per candidate (stable across runs)."""
-    taken: set[str] = set()
-    return [unique_slug(slugify(c.title), taken) for c in candidates]
+    """A numbered kebab-case basename per candidate, e.g. ``03-my-clip``.
+
+    The numeric prefix matches the clip's number in the table and in the
+    ``--adjust`` command, so files are easy to identify and always unique.
+    """
+    width = max(2, len(str(len(candidates))))
+    return [
+        f"{i + 1:0{width}d}-{slugify(c.title)}"
+        for i, c in enumerate(candidates)
+    ]
 
 
 def _clip_paths(
